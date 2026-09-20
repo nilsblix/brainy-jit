@@ -198,23 +198,23 @@ impl RuntimeState {
             Token::Decrement =>
                 tape[self.head] = tape[self.head].overflowing_sub(n as u8).0,
             Token::Output => {
-                let buf = &tape[self.head..self.head + n];
-                let mut stdout = std::io::stdout();
-                _ = stdout.write(&buf);
-                _ = stdout.flush();
+                let buf = vec![tape[self.head]; n];
+                std::io::stdout()
+                    .write_all(&buf)
+                    .map_err(|_| "runtime failure: io error")?;
+                std::io::stdout()
+                    .flush()
+                    .map_err(|_| "runtime failure: io error")?;
             },
             Token::Input => {
                 let mut stdin = std::io::stdin().lock();
-                let mut buf = vec![0u8; n];
-                let mut has_read = 0;
-                loop {
-                    has_read += stdin.read(&mut buf).map_err(|_| "runtime failure: io error")?;
-                    if has_read >= n {
-                        break;
-                    }
-                }
-                for i in 0..n {
-                    tape[self.head + i] = buf[i];
+                let mut buf = [0u8; 1];
+
+                for _ in 0..n {
+                    stdin
+                        .read_exact(&mut buf)
+                        .map_err(|_| "runtime failure: io error")?;
+                    tape[self.head] = buf[0];
                 }
             },
             Token::JumpForward => if tape[self.head] == 0 {
@@ -242,7 +242,7 @@ impl RuntimeState {
     }
 }
 
-pub fn run(program: &[u8], tape: &mut [u8]) -> Result<(), &'static str> {
+pub fn run_via_interpreter(program: &[u8], tape: &mut [u8]) -> Result<(), &'static str> {
     let ops = lower_to_ops(program)?;
 
     let mut runtime = RuntimeState::new();
