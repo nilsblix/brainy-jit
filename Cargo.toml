@@ -3,7 +3,8 @@ name = "brainf-rs"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[dev-dependencies]
+gag = "1.0.0"
 
 [lib]
 path = "lib.rs"

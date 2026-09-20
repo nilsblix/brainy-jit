@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let program = fs::read(file_path)?;
-    let mut tape = [0u8; 4096];
+    let mut tape = [0u8; 1024 * 16];
     bf::run(program.as_slice(), tape.as_mut_slice())?;
     Ok(())
 }
