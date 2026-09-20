@@ -1,0 +1,14 @@
+[package]
+name = "brainf-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[lib]
+path = "lib.rs"
+name = "bf"
+
+[[bin]]
+path = "cli.rs"
+name = "cli"
