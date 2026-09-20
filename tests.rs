@@ -2,7 +2,7 @@ use std::io;
 use std::io::{Read, Write};
 use gag;
 
-use super::run_via_interpreter;
+use super::run_with_interpreter;
 
 fn capture_stdout(run: impl FnOnce()) -> io::Result<Vec<u8>> {
     io::stdout().flush()?;
@@ -23,7 +23,7 @@ fn hello_world() {
     let output = capture_stdout(|| {
         let program = b"++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
         let mut tape = [0u8; 4096];
-        run_via_interpreter(program.as_slice(), tape.as_mut_slice()).unwrap();
+        run_with_interpreter(program.as_slice(), tape.as_mut_slice()).unwrap();
     }).unwrap();
 
     assert_eq!(output, b"Hello World!\n");

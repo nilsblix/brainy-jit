@@ -1,55 +1,3 @@
-// struct Lexer<'p> {
-//     idx: usize,
-//     program: &'p [u8],
-// }
-//
-// impl<'p> Lexer<'p> {
-//     fn new(program: &'p [u8]) -> Self {
-//         Self { idx: 0, program }
-//     }
-//
-//     fn at_valid_token(&self) -> bool {
-//         VALID_TOKENS.contains(&self.program[self.idx])
-//     }
-//
-//     fn peek(&self) -> Option<(u8, usize)> {
-//         let mut idx = self.idx;
-//         while idx < self.program.len() && !self.at_valid_token() {
-//             idx += 1;
-//         }
-//
-//         if idx >= self.program.len() {
-//             return None;
-//         }
-//
-//         let ret = self.program[idx];
-//         idx += 1;
-//         Some((ret, idx))
-//     }
-//
-//     fn next(&mut self) -> Option<u8> {
-//         let (ret, new_idx) = self.peek()?;
-//         self.idx = new_idx;
-//         Some(ret)
-//     }
-//
-//     fn next_straight(&mut self) -> Option<(u8, usize)> {
-//         let byte = self.next()?;
-//         let mut count = 1;
-//
-//         while self.peek().is_some_and(|x| x.0 == byte) {
-//             _ = self.next();
-//             count += 1;
-//         }
-//
-//         if self.peek().is_none() {
-//             return None;
-//         }
-//
-//         Some((byte, count))
-//     }
-// }
-
 #[repr(u8)]
 #[rustfmt::skip]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,9 +60,9 @@ struct Op {
     payload: usize,
 }
 
-type Ops = Vec<Op>;
+type OpSequence = Vec<Op>;
 
-fn lower_to_ops(program: &[u8]) -> Result<Ops, &'static str> {
+fn lower_to_ops(program: &[u8]) -> Result<OpSequence, &'static str> {
     let mut lexer = Lexer::new(program);
 
     let mut ops = Vec::new();
@@ -183,7 +131,7 @@ impl RuntimeState {
     fn execute_op_and_advance(
         &mut self,
         op: Op,
-        tape: &mut [u8]
+        tape: &mut [u8],
     ) -> Result<(), &'static str> {
         use std::io::{Write, Read};
 
@@ -242,7 +190,10 @@ impl RuntimeState {
     }
 }
 
-pub fn run_via_interpreter(program: &[u8], tape: &mut [u8]) -> Result<(), &'static str> {
+pub fn run_with_interpreter(
+    program: &[u8],
+    tape: &mut [u8],
+) -> Result<(), &'static str> {
     let ops = lower_to_ops(program)?;
 
     let mut runtime = RuntimeState::new();
