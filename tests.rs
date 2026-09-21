@@ -1,6 +1,6 @@
 use gag;
-use std::io::{Read, Write};
 use std::io;
+use std::io::{Read, Write};
 
 use super::run_aarch64_jit;
 use super::run_interpreter;
@@ -26,7 +26,8 @@ fn interpret_hello_world() {
     let output = capture_stdout(|| {
         let mut tape = [0u8; 4096];
         run_interpreter(HELLO_WORLD, tape.as_mut_slice()).unwrap();
-    }).unwrap();
+    })
+    .unwrap();
 
     assert_eq!(output, b"Hello World!\n");
 }
@@ -36,7 +37,8 @@ fn jit_hello_world() {
     let output = capture_stdout(|| {
         let mut tape = [0u8; 4096];
         run_aarch64_jit(HELLO_WORLD, tape.as_mut_slice()).unwrap();
-    }).unwrap();
+    })
+    .unwrap();
 
     assert_eq!(output, b"Hello World!\n");
 }
