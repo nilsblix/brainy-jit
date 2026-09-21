@@ -442,11 +442,12 @@ pub fn compile_bf_into_aarch64_binary(
         ; mov x1, tape_size as u64
         ; mov x2, #3        // PROT_READ (1) | PROT_WRITE (2)
         ; mov x3, #0x1002   // MAP_PRIVATE (2) | MAP_ANON (0x1000)
-        ; mov x4, #-1       // No backing file
+        ; movn x4, #0       // No backing file
         ; mov x5, #0        // No offset
         ; mov x16, #197     // 197 is the syscall ID for `mmap`.
         ; svc #0x80
         ; b.cs >allocation_failed
+        ; mov x1, tape_size as u64
         ; b ->prologue
 
         ; cleanup:
