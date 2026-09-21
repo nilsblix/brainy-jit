@@ -30,8 +30,7 @@ enum Mode {
 impl Mode {
     fn read_program(&self) -> Result<Vec<u8>, Box<dyn Error>> {
         let input = match self {
-            Self::Run { input, backend: _ } => input,
-            Self::Compile { input, output: _ } => input,
+            Self::Run { input, .. } | Self::Compile { input, .. } => input,
         };
         Ok(fs::read(input)?)
     }
@@ -50,20 +49,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bytes = program.as_slice();
 
     match args.mode {
-        Mode::Run { input: _, backend: engine } => match engine {
-            Backend::Jit => {
-                let mut tape = vec![0u8; args.tape_size];
-                Ok(bf::run_aarch64_jit(bytes, tape.as_mut_slice())?)
-            },
-            Backend::Interpreter => {
-                let mut tape = vec![0u8; args.tape_size];
-                Ok(bf::run_interpreter(bytes, tape.as_mut_slice())?)
-            },
-        },
-        Mode::Compile { input: _, output } => {
-            let tape_size = args.tape_size;
-            let blob = bf::compile_bf_into_aarch64_binary(bytes, tape_size)?;
-            Ok(fs::write(output, blob.machine_code)?)
-        },
+        Mode::Run { backend, .. } => {
+            let mut tape = vec![0u8; args.tape_size];
+            match backend {
+                Backend::Jit => bf::run_aarch64_jit(bytes, &mut tape)?,
+                Backend::Interpreter => bf::run_interpreter(bytes, &mut tape)?,
+            }
+        }
+        Mode::Compile { output, .. } => {
+            let blob = bf::compile_bf_into_aarch64_binary(bytes, args.tape_size)?;
+            blob.dump_to_file(output)?;
+        }
     }
+
+    Ok(())
 }

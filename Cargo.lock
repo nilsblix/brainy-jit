@@ -65,6 +65,7 @@ dependencies = [
  "clap",
  "dynasmrt",
  "gag",
+ "tempfile",
 ]
 
 [[package]]

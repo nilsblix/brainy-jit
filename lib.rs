@@ -1,4 +1,8 @@
 use core::mem;
+use std::fs;
+use std::io::{self, ErrorKind};
+use std::path::Path;
+use std::process::Command;
 
 use dynasmrt::{
     aarch64::Aarch64Relocation, dynasm, AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, ExecutableBuffer
@@ -413,6 +417,71 @@ pub fn run_aarch64_jit(
 pub struct CodeBlob {
     pub machine_code: Vec<u8>,
     pub entry_offset: usize,
+}
+
+impl CodeBlob {
+    /// Packages this code as an AArch64 Mach-O executable using `clang`.
+    pub fn dump_to_file(&self, output: impl AsRef<Path>) -> io::Result<()> {
+        if self.entry_offset >= self.machine_code.len() || self.entry_offset % 4 != 0 {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "code entry offset is not a valid AArch64 instruction offset",
+            ));
+        }
+
+        let temporary_directory = tempfile::tempdir()?;
+        let machine_code_path = temporary_directory.path().join("program.bin");
+        let wrapper_path = temporary_directory.path().join("wrapper.s");
+
+        fs::write(&machine_code_path, &self.machine_code)?;
+
+        let wrapper = if self.entry_offset == 0 {
+            String::from(
+                ".section __TEXT,__text,regular,pure_instructions\n\
+                 .globl _main\n\
+                 .p2align 2\n\
+                 _main:\n\
+                 .incbin \"program.bin\"\n",
+            )
+        } else {
+            format!(
+                ".section __TEXT,__text,regular,pure_instructions\n\
+                 .p2align 2\n\
+                 .incbin \"program.bin\", 0, {entry_offset}\n\
+                 .globl _main\n\
+                 _main:\n\
+                 .incbin \"program.bin\", {entry_offset}\n",
+                entry_offset = self.entry_offset,
+            )
+        };
+        fs::write(&wrapper_path, wrapper)?;
+
+        let output = if output.as_ref().is_absolute() {
+            output.as_ref().to_owned()
+        } else {
+            std::env::current_dir()?.join(output)
+        };
+
+        let status = Command::new("clang")
+            .arg("-arch")
+            .arg("arm64")
+            .arg(&wrapper_path)
+            .arg("-o")
+            .arg(output)
+            .current_dir(temporary_directory.path())
+            .status()
+            .map_err(|error| {
+                io::Error::new(error.kind(), format!("failed to invoke clang: {error}"))
+            })?;
+
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "clang failed to create the executable with status {status}"
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 pub fn compile_bf_into_aarch64_binary(
