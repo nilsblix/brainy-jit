@@ -395,5 +395,12 @@ pub fn run_aarch64_jit(
     }
 }
 
+/// Runs the given program via aarch64-JIT with a tape-size of 16kB.
+pub fn bf(program: &str) -> Result<(), &'static str> {
+    let bytes = program.as_bytes();
+    let mut tape = [0u8; 1024 * 16];
+    run_aarch64_jit(bytes, tape.as_mut_slice())
+}
+
 #[cfg(test)]
 mod tests;
