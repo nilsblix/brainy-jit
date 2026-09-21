@@ -13,3 +13,6 @@ name = "bf"
 [[bin]]
 path = "cli.rs"
 name = "cli"
+
+[dependencies]
+dynasmrt = "5.1.0"

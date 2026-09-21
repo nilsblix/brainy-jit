@@ -1,3 +1,15 @@
+use core::mem;
+
+use dynasmrt::{
+    aarch64,
+    AssemblyOffset,
+    DynamicLabel,
+    DynasmApi,
+    DynasmLabelApi,
+    ExecutableBuffer,
+    dynasm,
+};
+
 #[repr(u8)]
 #[rustfmt::skip]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -199,6 +211,191 @@ pub fn run_with_interpreter(
     let mut runtime = RuntimeState::new();
     runtime.execute_ops(ops.as_slice(), tape)
 }
+
+type JitBeginning = unsafe extern "C" fn(tape: *mut u8, tape_len: usize);
+
+struct CompiledProgram {
+    code: ExecutableBuffer,
+    entry: AssemblyOffset,
+}
+
+impl CompiledProgram {
+    fn run(&self, tape: &mut [u8]) {
+        let entry_ptr = self.code.ptr(self.entry);
+        let func: JitBeginning = unsafe { mem::transmute(entry_ptr) };
+        unsafe { func(tape.as_mut_ptr(), tape.len()) }
+    }
+}
+
+fn emit_aarch64_op(
+    assembler: &mut aarch64::Assembler,
+    labels: &[DynamicLabel],
+    op: &Op,
+) {
+    match op.kind {
+        Token::Right => {
+            let steps = op.payload as u32;
+            dynasm!(assembler
+                ; .arch aarch64
+                ; add x19, x19, steps
+                ; cmp x19, x21
+                ; b.hs >bounds_error
+            );
+        },
+        Token::Left => {
+            let steps = op.payload as u32;
+            dynasm!(assembler
+                ; .arch aarch64
+                ; sub x19, x19, steps
+                ; cmp x19, x20
+                ; b.lo >bounds_error
+            );
+        },
+        Token::Increment => {
+            let n = (op.payload % 256) as u32;
+            dynasm!(assembler
+                ; .arch aarch64
+                ; ldrb w1, [x19]
+                ; add w1, w1, n
+                ; strb w1, [x19]
+            );
+        },
+        Token::Decrement => {
+            let n = (op.payload % 256) as u32;
+            dynasm!(assembler
+                ; .arch aarch64
+                ; ldrb w1, [x19]
+                ; sub w1, w1, n
+                ; strb w1, [x19]
+            );
+        },
+        Token::Output => {
+            let n = op.payload;
+            for _ in 0..n {
+                dynasm!(assembler
+                    ; .arch aarch64
+                    ; mov x0, #1     // stdout file-descriptor is 1.
+                    ; mov x1, x19    // pointer to the buffer (head).
+                    ; mov x2, #1     // we write one byte.
+                    ; mov x16, #4    // 4 is the id for write on XNU.
+                    ; svc #0x80      // 0x80 is habit.
+                    ; b.cs >io_error // write-call returned some failure.
+                    ; cmp x0, #1
+                    ; b.ne >io_error // reject partial writes.
+                );
+            }
+        },
+        Token::Input => {
+            let n = op.payload;
+            for _ in 0..n {
+                dynasm!(assembler
+                    ; .arch aarch64
+                    ; mov x0, #0     // stdin file-descriptor is 0.
+                    ; mov x1, x19    // pointer to the buffer (head).
+                    ; mov x2, #1     // we read one byte.
+                    ; mov x16, #3    // 3 is the id for read on XNU.
+                    ; svc #0x80      // 0x80 is habit.
+                    ; b.cs >io_error // read-call returned some failure.
+                    ; cmp x0, #1
+                    ; b.ne >io_error // reject partial reads.
+                );
+            }
+        },
+        Token::JumpForward => {
+            let target = labels[op.payload];
+            dynasm!(assembler
+                ; .arch aarch64
+                ; ldrb w1, [x19]
+                ; cbz w1, =>target
+            );
+        },
+        Token::JumpBackward => {
+            let target = labels[op.payload];
+            dynasm!(assembler
+                ; .arch aarch64
+                ; ldrb w1, [x19]
+                ; cbnz w1, =>target
+            );
+        },
+    }
+}
+
+pub fn run_with_jit(
+    program: &[u8],
+    tape: &mut [u8],
+) -> Result<(), &'static str> {
+    let ops = lower_to_ops(program)?;
+
+    tape.fill(0);
+    tape[0] = 41;
+
+    let mut assembler = dynasmrt::aarch64::Assembler::new().unwrap();
+    let entry = assembler.offset();
+
+    let op_labels: Vec<DynamicLabel> = (0..=ops.len())
+        .map(|_| assembler.new_dynamic_label())
+        .collect();
+
+    dynasm!(assembler
+        ; .arch aarch64
+
+        // extern "C" arguments:
+        // x0: tape pointer.
+        // x1: tape len.
+
+        ; b >prologue
+
+        ; prologue:
+        ; stp x19, x20, [sp, #-32]!
+        ; str x21,      [sp, #16]
+        ; mov x19, x0
+        ; mov x20, x1
+        ; add x21, x0, x1
+        ; b =>op_labels[0]
+
+        ; success:
+        ; mov w0, #0
+        ; b >epilogue
+
+        ; bounds_error:
+        ; mov w0, #1
+        ; b >epilogue
+
+        ; io_error:
+        ; mov w0, #2
+        ; b >epilogue
+
+        ; epilogue:
+        ; ldr x21, [sp, #16]
+        ; ldp x19, x20, [sp], #32
+        ; ret
+    );
+
+    for (idx, op) in ops.iter().enumerate() {
+        dynasm!(assembler
+            ; .arch aarch64
+            ; =>op_labels[idx]
+        );
+
+        emit_aarch64_op(&mut assembler, op_labels.as_slice(), op);
+    }
+
+    dynasm!(assembler
+        ; .arch aarch64
+        ; =>op_labels[ops.len()]
+        ; b >success
+    );
+
+    let code = assembler.finalize().unwrap();
+    let compiled = CompiledProgram { code, entry };
+
+    println!("(0) tape: {:?}", tape);
+    compiled.run(tape);
+    println!("(1) tape: {:?}", tape);
+
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod tests;
