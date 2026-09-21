@@ -414,12 +414,12 @@ pub fn run_aarch64_jit(
     }
 }
 
-pub struct CodeBlob {
+pub struct MachineBlob {
     pub machine_code: Vec<u8>,
     pub entry_offset: usize,
 }
 
-impl CodeBlob {
+impl MachineBlob {
     /// Packages this code as an AArch64 Mach-O executable using `clang`.
     pub fn dump_to_file(&self, output: impl AsRef<Path>) -> io::Result<()> {
         if self.entry_offset >= self.machine_code.len() || self.entry_offset % 4 != 0 {
@@ -487,7 +487,7 @@ impl CodeBlob {
 pub fn compile_bf_into_aarch64_binary(
     program: &[u8],
     tape_size: usize,
-) -> Result<CodeBlob, &'static str> {
+) -> Result<MachineBlob, &'static str> {
     let mut assembler = dynasmrt::VecAssembler::<Aarch64Relocation>::new(0);
     let entry_offset = assembler.offset().0;
 
@@ -552,7 +552,7 @@ pub fn compile_bf_into_aarch64_binary(
 
     let machine_code = assembler.finalize().unwrap();
 
-    Ok(CodeBlob { machine_code, entry_offset })
+    Ok(MachineBlob { machine_code, entry_offset })
 }
 
 #[cfg(test)]
