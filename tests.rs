@@ -1,9 +1,9 @@
-use std::io;
-use std::io::{Read, Write};
 use gag;
+use std::io::{Read, Write};
+use std::io;
 
-use super::run_interpreter;
 use super::run_aarch64_jit;
+use super::run_interpreter;
 
 fn capture_stdout(run: impl FnOnce()) -> io::Result<Vec<u8>> {
     io::stdout().flush()?;
