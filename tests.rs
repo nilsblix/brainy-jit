@@ -2,7 +2,8 @@ use std::io;
 use std::io::{Read, Write};
 use gag;
 
-use super::run_with_interpreter;
+use super::run_interpreter;
+use super::run_aarch64_jit;
 
 fn capture_stdout(run: impl FnOnce()) -> io::Result<Vec<u8>> {
     io::stdout().flush()?;
@@ -18,12 +19,23 @@ fn capture_stdout(run: impl FnOnce()) -> io::Result<Vec<u8>> {
     Ok(output)
 }
 
+const HELLO_WORLD: &'static [u8] = b"++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
+
 #[test]
-fn hello_world() {
+fn interpret_hello_world() {
     let output = capture_stdout(|| {
-        let program = b"++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
         let mut tape = [0u8; 4096];
-        run_with_interpreter(program.as_slice(), tape.as_mut_slice()).unwrap();
+        run_interpreter(HELLO_WORLD, tape.as_mut_slice()).unwrap();
+    }).unwrap();
+
+    assert_eq!(output, b"Hello World!\n");
+}
+
+#[test]
+fn jit_hello_world() {
+    let output = capture_stdout(|| {
+        let mut tape = [0u8; 4096];
+        run_aarch64_jit(HELLO_WORLD, tape.as_mut_slice()).unwrap();
     }).unwrap();
 
     assert_eq!(output, b"Hello World!\n");

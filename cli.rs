@@ -13,11 +13,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let program = fs::read(file_path)?;
-    let mut tape = [0u8; 256];
+    let mut tape = [0u8; 4096];
 
     match command.as_str() {
-        "int" => bf::run_with_interpreter(&program, &mut tape)?,
-        "jit" => bf::run_with_jit(&program, &mut tape)?,
+        "int" => bf::run_interpreter(&program, &mut tape)?,
+        "jit" => bf::run_aarch64_jit(&program, &mut tape)?,
         _ => return Err("unknown command")?,
     }
 

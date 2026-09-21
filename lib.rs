@@ -67,7 +67,7 @@ struct Op {
     /// For `><+-.,` it means the amount of times to repeat the operation, while
     /// for `[]` it means the address to jump to.
     ///
-    /// Note that for `<>+-.,` the payload should always be castable to a u8,
+    /// Note that for `+-` the payload should always be castable to a u8,
     /// due to the tape works in Brainfuck.
     payload: usize,
 }
@@ -202,7 +202,7 @@ impl RuntimeState {
     }
 }
 
-pub fn run_with_interpreter(
+pub fn run_interpreter(
     program: &[u8],
     tape: &mut [u8],
 ) -> Result<(), &'static str> {
@@ -212,7 +212,7 @@ pub fn run_with_interpreter(
     runtime.execute_ops(ops.as_slice(), tape)
 }
 
-type JitBeginning = unsafe extern "C" fn(tape: *mut u8, tape_len: usize);
+type JitBeginning = unsafe extern "C" fn(tape: *mut u8, tape_len: usize) -> i32;
 
 struct CompiledProgram {
     code: ExecutableBuffer,
@@ -220,7 +220,7 @@ struct CompiledProgram {
 }
 
 impl CompiledProgram {
-    fn run(&self, tape: &mut [u8]) {
+    fn run(&self, tape: &mut [u8]) -> i32 {
         let entry_ptr = self.code.ptr(self.entry);
         let func: JitBeginning = unsafe { mem::transmute(entry_ptr) };
         unsafe { func(tape.as_mut_ptr(), tape.len()) }
@@ -239,7 +239,7 @@ fn emit_aarch64_op(
                 ; .arch aarch64
                 ; add x19, x19, steps
                 ; cmp x19, x21
-                ; b.hs >bounds_error
+                ; b.hs ->bounds_error
             );
         },
         Token::Left => {
@@ -248,7 +248,7 @@ fn emit_aarch64_op(
                 ; .arch aarch64
                 ; sub x19, x19, steps
                 ; cmp x19, x20
-                ; b.lo >bounds_error
+                ; b.lo ->bounds_error
             );
         },
         Token::Increment => {
@@ -279,9 +279,9 @@ fn emit_aarch64_op(
                     ; mov x2, #1     // we write one byte.
                     ; mov x16, #4    // 4 is the id for write on XNU.
                     ; svc #0x80      // 0x80 is habit.
-                    ; b.cs >io_error // write-call returned some failure.
+                    ; b.cs ->io_error // write-call returned some failure.
                     ; cmp x0, #1
-                    ; b.ne >io_error // reject partial writes.
+                    ; b.ne ->io_error // reject partial writes.
                 );
             }
         },
@@ -295,9 +295,9 @@ fn emit_aarch64_op(
                     ; mov x2, #1     // we read one byte.
                     ; mov x16, #3    // 3 is the id for read on XNU.
                     ; svc #0x80      // 0x80 is habit.
-                    ; b.cs >io_error // read-call returned some failure.
+                    ; b.cs ->io_error // read-call returned some failure.
                     ; cmp x0, #1
-                    ; b.ne >io_error // reject partial reads.
+                    ; b.ne ->io_error // reject partial reads.
                 );
             }
         },
@@ -320,14 +320,11 @@ fn emit_aarch64_op(
     }
 }
 
-pub fn run_with_jit(
+pub fn run_aarch64_jit(
     program: &[u8],
     tape: &mut [u8],
 ) -> Result<(), &'static str> {
     let ops = lower_to_ops(program)?;
-
-    tape.fill(0);
-    tape[0] = 41;
 
     let mut assembler = dynasmrt::aarch64::Assembler::new().unwrap();
     let entry = assembler.offset();
@@ -349,23 +346,23 @@ pub fn run_with_jit(
         ; stp x19, x20, [sp, #-32]!
         ; str x21,      [sp, #16]
         ; mov x19, x0
-        ; mov x20, x1
+        ; mov x20, x0
         ; add x21, x0, x1
         ; b =>op_labels[0]
 
-        ; success:
+        ; ->success:
         ; mov w0, #0
-        ; b >epilogue
+        ; b ->epilogue
 
-        ; bounds_error:
+        ; ->bounds_error:
         ; mov w0, #1
-        ; b >epilogue
+        ; b ->epilogue
 
-        ; io_error:
+        ; ->io_error:
         ; mov w0, #2
-        ; b >epilogue
+        ; b ->epilogue
 
-        ; epilogue:
+        ; ->epilogue:
         ; ldr x21, [sp, #16]
         ; ldp x19, x20, [sp], #32
         ; ret
@@ -383,17 +380,19 @@ pub fn run_with_jit(
     dynasm!(assembler
         ; .arch aarch64
         ; =>op_labels[ops.len()]
-        ; b >success
+        ; b ->success
     );
 
     let code = assembler.finalize().unwrap();
     let compiled = CompiledProgram { code, entry };
 
-    println!("(0) tape: {:?}", tape);
-    compiled.run(tape);
-    println!("(1) tape: {:?}", tape);
-
-    Ok(())
+    let status = compiled.run(tape);
+    match status {
+        0 => Ok(()),
+        1 => Err("Program segfaulted. Tip: Try increasing the tape length and run again"),
+        2 => Err("Program failed due to unknown io-error"),
+        _ => Err("Program retured with unknown status code"),
+    }
 }
 
 
