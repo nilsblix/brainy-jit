@@ -1,13 +1,7 @@
 use core::mem;
 
 use dynasmrt::{
-    aarch64,
-    AssemblyOffset,
-    DynamicLabel,
-    DynasmApi,
-    DynasmLabelApi,
-    ExecutableBuffer,
-    dynasm,
+    aarch64::Aarch64Relocation, dynasm, AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, ExecutableBuffer
 };
 
 #[repr(u8)]
@@ -228,7 +222,7 @@ impl CompiledProgram {
 }
 
 fn emit_aarch64_op(
-    assembler: &mut aarch64::Assembler,
+    assembler: &mut impl DynasmLabelApi<Relocation = Aarch64Relocation>,
     labels: &[DynamicLabel],
     op: &Op,
 ) {
@@ -320,19 +314,16 @@ fn emit_aarch64_op(
     }
 }
 
-pub fn run_aarch64_jit(
-    program: &[u8],
-    tape: &mut [u8],
+/// Expects the registers to be setup according to the XNU calling conventions
+/// when calling an `extern "C" JitBeginning` function.
+///
+/// * x0: tape pointer.
+/// * x1: tape length.
+fn append_callable_program(
+    assembler: &mut impl DynasmLabelApi<Relocation = Aarch64Relocation>,
+    ops: &[Op],
+    op_labels: &[DynamicLabel],
 ) -> Result<(), &'static str> {
-    let ops = lower_to_ops(program)?;
-
-    let mut assembler = dynasmrt::aarch64::Assembler::new().unwrap();
-    let entry = assembler.offset();
-
-    let op_labels: Vec<DynamicLabel> = (0..=ops.len())
-        .map(|_| assembler.new_dynamic_label())
-        .collect();
-
     dynasm!(assembler
         ; .arch aarch64
 
@@ -340,9 +331,9 @@ pub fn run_aarch64_jit(
         // x0: tape pointer.
         // x1: tape len.
 
-        ; b >prologue
+        ; b ->prologue
 
-        ; prologue:
+        ; ->prologue:
         ; stp x19, x20, [sp, #-32]!
         ; str x21,      [sp, #16]
         ; mov x19, x0
@@ -355,17 +346,12 @@ pub fn run_aarch64_jit(
         ; b ->epilogue
 
         ; ->bounds_error:
-        ; mov w0, #1
+        ; mov w0, #14 // EFAULT (14) Bad address.
         ; b ->epilogue
 
         ; ->io_error:
-        ; mov w0, #2
+        ; mov w0, #5 // EIO (5) Input/output error.
         ; b ->epilogue
-
-        ; ->epilogue:
-        ; ldr x21, [sp, #16]
-        ; ldp x19, x20, [sp], #32
-        ; ret
     );
 
     for (idx, op) in ops.iter().enumerate() {
@@ -374,7 +360,7 @@ pub fn run_aarch64_jit(
             ; =>op_labels[idx]
         );
 
-        emit_aarch64_op(&mut assembler, op_labels.as_slice(), op);
+        emit_aarch64_op(assembler, op_labels, op);
     }
 
     dynasm!(assembler
@@ -383,23 +369,120 @@ pub fn run_aarch64_jit(
         ; b ->success
     );
 
+    dynasm!(assembler
+        ; .arch aarch64
+        ; ->epilogue:
+        ; mov x8, x20
+        ; sub x9, x21, x20
+        ; ldr x21, [sp, #16]
+        ; ldp x19, x20, [sp], #32
+    );
+    Ok(())
+}
+
+pub fn run_aarch64_jit(
+    program: &[u8],
+    tape: &mut [u8],
+) -> Result<(), &'static str> {
+    let mut assembler = dynasmrt::aarch64::Assembler::new().unwrap();
+    let entry = assembler.offset();
+
+    let ops = lower_to_ops(program)?;
+    let labels: Vec<DynamicLabel> = (0..=ops.len())
+        .map(|_| assembler.new_dynamic_label())
+        .collect();
+
+    append_callable_program(&mut assembler, ops.as_slice(), labels.as_slice())?;
+    dynasm!(assembler
+        ; .arch aarch64
+        ; ret
+    );
+
     let code = assembler.finalize().unwrap();
     let compiled = CompiledProgram { code, entry };
 
     let status = compiled.run(tape);
     match status {
         0 => Ok(()),
-        1 => Err("Program segfaulted. Tip: Try increasing the tape length and run again"),
-        2 => Err("Program failed due to unknown io-error"),
+        14 => Err("Program segfaulted. Tip: Try increasing the tape length and run again"),
+        5 => Err("Program failed due to unknown io-error"),
         _ => Err("Program retured with unknown status code"),
     }
 }
 
-/// Runs the given program via aarch64-JIT with a tape-size of 16kB.
-pub fn bf(program: &str) -> Result<(), &'static str> {
-    let bytes = program.as_bytes();
-    let mut tape = [0u8; 1024 * 16];
-    run_aarch64_jit(bytes, tape.as_mut_slice())
+pub struct CodeBlob {
+    pub machine_code: Vec<u8>,
+    pub entry_offset: usize,
+}
+
+pub fn compile_bf_into_aarch64_binary(
+    program: &[u8],
+    tape_size: usize,
+) -> Result<CodeBlob, &'static str> {
+    let mut assembler = dynasmrt::VecAssembler::<Aarch64Relocation>::new(0);
+    let entry_offset = assembler.offset().0;
+
+    // Before appending the brainfuck-program, we need to setup the registers
+    // according to the `JitBeginning` function definition and XNU calling
+    // convention.
+    //
+    // In short, we need to prepare the program with the tape, and deal with the
+    // cleanup afterwards:
+    //
+    // 1. Allocate the tape.
+    // 2. Setup the registers accordingly:
+    //    * x0: tape pointer.
+    //    * x1: tape length.
+    // 3. Append the callable program.
+    // 4. Free the tape (the OS does this for us actually when our executable
+    //    terminates, but lets be pragmatic programmers today...).
+
+    dynasm!(assembler
+        ; mov x0, #0        // Let the kernel choose the address
+        ; mov x1, tape_size as u64
+        ; mov x2, #3        // PROT_READ (1) | PROT_WRITE (2)
+        ; mov x3, #0x1002   // MAP_PRIVATE (2) | MAP_ANON (0x1000)
+        ; mov x4, #-1       // No backing file
+        ; mov x5, #0        // No offset
+        ; mov x16, #197     // 197 is the syscall ID for `mmap`.
+        ; svc #0x80
+        ; b.cs >allocation_failed
+        ; b ->prologue
+
+        ; cleanup:
+        ; mov x7, x0
+        ; mov x0, x8
+        ; mov x1, x9
+        ; mov x16, #73 // 73 is the syscall ID for `munmap`.
+        ; svc #0x80
+        ; b.cs >deallocation_failed
+        ; mov x0, x7
+        ; ret
+
+        ; allocation_failed:
+        ; mov w0, #12 // ENOMEM (12) Cannot allocate memory.
+        ; ret
+
+        ; deallocation_failed:
+        ; mov w0, #1 // EPERM (1) Operation not permitted.
+        ; ret
+    );
+
+    let ops = lower_to_ops(program)?;
+    let labels: Vec<DynamicLabel> = (0..=ops.len())
+        .map(|_| assembler.new_dynamic_label())
+        .collect();
+
+    append_callable_program(&mut assembler, ops.as_slice(), labels.as_slice())?;
+
+    dynasm!(assembler
+        ; .arch aarch64
+        ; b <cleanup
+    );
+
+    let machine_code = assembler.finalize().unwrap();
+
+    Ok(CodeBlob { machine_code, entry_offset })
 }
 
 #[cfg(test)]

@@ -48,18 +48,22 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let program = args.mode.read_program()?;
     let bytes = program.as_slice();
-    let mut tape = vec![0u8; args.tape_size];
 
     match args.mode {
         Mode::Run { input: _, backend: engine } => match engine {
-            Backend::Jit =>
-                Ok(bf::run_aarch64_jit(bytes, tape.as_mut_slice())?),
-            Backend::Interpreter =>
-                Ok(bf::run_interpreter(bytes, tape.as_mut_slice())?),
+            Backend::Jit => {
+                let mut tape = vec![0u8; args.tape_size];
+                Ok(bf::run_aarch64_jit(bytes, tape.as_mut_slice())?)
+            },
+            Backend::Interpreter => {
+                let mut tape = vec![0u8; args.tape_size];
+                Ok(bf::run_interpreter(bytes, tape.as_mut_slice())?)
+            },
         },
         Mode::Compile { input: _, output } => {
-            _ = output;
-            todo!("compile output");
+            let tape_size = args.tape_size;
+            let blob = bf::compile_bf_into_aarch64_binary(bytes, tape_size)?;
+            Ok(fs::write(output, blob.machine_code)?)
         },
     }
 }
